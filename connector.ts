@@ -7,7 +7,6 @@ class BynderConnector implements Media.MediaConnector {
         this.runtime = runtime;
     }
 
-
     /**
      * CENTRALIZED REQUEST HELPER
      */
@@ -17,7 +16,6 @@ class BynderConnector implements Media.MediaConnector {
         const response = await this.runtime.fetch(endpoint, {
             method,
             headers: {
-                //"Authorization": `Bearer ${this.runtime.options["token"]}`,
                 "Accept": "application/json"
             },
             body
@@ -43,7 +41,7 @@ class BynderConnector implements Media.MediaConnector {
         return {
               query: true,
               detail: true,
-              filtering: false,
+              filtering: true,
               metadata: true,
         };
     }
@@ -52,7 +50,10 @@ class BynderConnector implements Media.MediaConnector {
     options: Connector.QueryOptions,
     context: Connector.Dictionary
   ): Promise<Media.MediaPage> {
-    //this.getToken(context);
+    let filter = "";
+    if (options.filter[0] !== "") {
+      filter = options.filter[0];
+    }
     if(options.pageSize==1 && !options.collection) {
       const assetId = options.filter[0]
       const asset = await this.detail(assetId, context)
@@ -64,11 +65,6 @@ class BynderConnector implements Media.MediaConnector {
         },
       }
     }
-
-    //handle collection view
-    this.runtime.logError(`Querying with context: ${JSON.stringify(context)}`);
-    this.runtime.logError(`Querying with options: ${JSON.stringify(options)}`);
-
     let collectionFilter= "";
     if (context.collectionView) {
         context.collection = "";// Ignore collection filter when in collection view mode
@@ -76,11 +72,9 @@ class BynderConnector implements Media.MediaConnector {
 
     if (options.collection == "/") {
         if (context.collection == null || context.collection === "") {
-            this.runtime.logError("No collection filter provided in options or context - fetching all media");
             collectionFilter = ""; // No filter, fetch all media
         }
         else{
-            this.runtime.logError(`Using collection filter from context: ${context.collection}`);
             collectionFilter = context.collection.toString().replace(/\//g, "");
         }
     }
@@ -88,20 +82,16 @@ class BynderConnector implements Media.MediaConnector {
         collectionFilter = options.collection.toString().replace(/\//g, "");
         context.collection = ""; // Ensure context is updated with collection filter for downstream use
     }
-    this.runtime.logError(`Determined collection filter: ${collectionFilter}`);
 
     if (context["collectionView"] && collectionFilter == "") {
-        this.runtime.logError("Collection view enabled - fetching collections instead of assets");
         const res = await this.request(`https://${this.runtime.options["baseURL"]}/api/v4/collections/`, context);
         const collections = JSON.parse(res.text);
-
         const dataFormatted= collections.map((c: any)=> ({
             id: c.id,
             name: c.name,
             relativePath: '/',
             extention: '',
             type: 1, // type 1 for collection, 0 for asset
-            metaData: {},
           }));
 
         return {
@@ -116,9 +106,7 @@ class BynderConnector implements Media.MediaConnector {
 
     let cid = "";
     if (collectionFilter !== "") {
-        
-        this.runtime.logError(`Searching for collection with name: ${collectionFilter}`);
-        const res = await this.request(`https://${this.runtime.options["baseURL"]}/api/v4/collections/?keyword=${collectionFilter}`, context);
+        const res = await this.request(`https://${this.runtime.options["baseURL"]}/api/v4/collections/?keyword=${collectionFilter}${filter ? `&keyword=${filter}` : ""}`, context);
         const collections = JSON.parse(res.text);
 
         if (Array.isArray(collections) && collections.length > 0) {
@@ -128,7 +116,7 @@ class BynderConnector implements Media.MediaConnector {
 
     const pageNumber = Number(options.pageToken) || 1;
     const resp = await this.request(
-      `https://${this.runtime.options["baseURL"]}/api/v4/media/?page=${pageNumber}&limit=${options.pageSize}${cid ? `&collectionId=${cid}` : ""}`, context);
+      `https://${this.runtime.options["baseURL"]}/api/v4/media/?page=${pageNumber}&limit=${options.pageSize}${cid ? `&collectionId=${cid}` : ""}${filter ? `&keyword=${filter}` : ""}`, context);
     
     const data = JSON.parse(resp.text);
 
@@ -138,7 +126,7 @@ class BynderConnector implements Media.MediaConnector {
       relativePath: '/',
       extention: d.extension[0],
       type: 0, // type 1 for collection, 0 for asset
-      metaData: {},
+      metaData: {width: d.width.toString(), height: d.height.toString(), name: d.name.toString(), brandId: d.brandId.toString()},
     }));
 
     return {
@@ -161,22 +149,22 @@ class BynderConnector implements Media.MediaConnector {
             name: asset.name,
             brandId: asset.brandId.toString()
         };
-        this.runtime.logError(`Asset ${id} metadata: ${JSON.stringify(metadata)}`);
         // DYNAMIC METAPROPERTY MAPPING
         // Maps Bynder "metaproperties" to the requested "property_Name" format
-        if (asset.propertyOptions) {
-            asset.propertyOptions.forEach((prop: any) => {
-                const cleanKey = `property_${prop.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
-                metadata[cleanKey] = prop.options.join(", ");
+        Object.keys(asset)
+            .filter((key) => key.startsWith("property_"))
+            .forEach((key) => {
+                const value = asset[key];
+                const name = key.toString().replace(/^property_/, "");
+                // Add the value under the raw property name (without prefix), converted to string
+                metadata[name] = value.toString();
             });
-        }
-
         return {
             id: asset.id,
             name: asset.name,
             relativePath: "/",
             type: 0,
-            metaData: metadata
+            metaData: metadata,
         };
     }
 
@@ -199,66 +187,26 @@ class BynderConnector implements Media.MediaConnector {
 
         switch (previewType) {
             case "thumbnail": {
-            const picture = await this.runtime.fetch(`${asset.thumbnails.thul}`, { method: "GET",
-        // headers: { 
-        //     "Authorization": `Bearer ${this.runtime.options["token"]}`,
-        // }, 
-         });
-            return picture.arrayBuffer;
+                const picture = await this.runtime.fetch(`${asset.thumbnails.thul}`, { method: "GET",
+                });
+                return picture.arrayBuffer;
             }
             case "mediumres": {
-            const picture = await this.runtime.fetch(`${asset.thumbnails.webimage}`, { method: "GET",
-        // headers: { 
-        //     "Authorization": `Bearer ${this.runtime.options["token"]}`,
-        // }, 
-    });
-            return picture.arrayBuffer;
+                const picture = await this.runtime.fetch(`${asset.thumbnails.webimage}`, { method: "GET",
+                });
+                return picture.arrayBuffer;
             }
             case "highres": {
-            const picture = await this.runtime.fetch(`${defaultUrl}`, { method: "GET",
-            });
-            return picture.arrayBuffer;
-            }
+                const picture = await this.runtime.fetch(`${defaultUrl}`, { method: "GET",
+                });
+                return picture.arrayBuffer;
+                }
             default: {
-            const picture = await this.runtime.fetch(`${defaultUrl}`, { method: "GET",
-            });
+                const picture = await this.runtime.fetch(`${defaultUrl}`, { method: "GET",
+                });
             return picture.arrayBuffer;
             }
         }
-        }
-
-        async getToken(context: Connector.Dictionary): Promise<string> {
-            // Bynder uses static tokens, so we can return the token from options
-            let cid = this.runtime.options["cid"];
-            let csec = this.runtime.options["csec"];
-            if (!cid || !csec) {
-                throw new Error("Client ID and Client Secret must be provided in connector options");
-            }
-            //https://example.com/v6/authentication/oauth2/token{client_credentials}
-            const params = [
-                `grant_type=client_credentials`,
-                `client_id=${cid}`,
-                `client_secret=${csec}`,
-                `scope=collection:read asset:read`,
-            ];
-
-            const res = await this.runtime.fetch(`https://${this.runtime.options["baseURL"]}/v6/authentication/oauth2/token`, {
-            method: "POST",
-            headers: { 
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded" 
-            },
-            body: params.join("&"),
-            });
-            
-            if (!res.ok) {
-                const err = await res.text;
-                throw new Error(`Bynder Authenticatioon Error: ${res.status} - ${err}`);
-            }
-            const resp = JSON.parse(res.text);
-            const token = resp.access_token;
-            this.runtime.options["token"] = token;
-            return token;
         }
 }
 

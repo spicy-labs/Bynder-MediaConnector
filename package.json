@@ -10,7 +10,7 @@
   "config": {
     "connectorName": "Bynder",
     "type": "media",
-    "options": {"baseURL": "chili-publish-sandbox.bynder.com", "token": "", "cid": "", "csec" : ""},
+    "options": {"baseURL": ""},
     "mappings": {},
     "supportedAuth": ["oAuth2ClientCredentials"]
   },
